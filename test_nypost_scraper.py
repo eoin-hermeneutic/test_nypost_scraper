@@ -16,26 +16,40 @@ import json
 import logging
 import aiohttp
 
-# Add logging configuration
+# Configure logging to track script execution and debugging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     filename=f'nypost_scraper_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
 )
 
-# Consolidate Chrome options into a function
 def get_chrome_options():
+    """
+    Configure Chrome browser options for headless scraping.
+    
+    Returns:
+        Options: Configured Chrome options for optimal scraping performance
+    """
     options = Options()
-    options.add_argument("--headless")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--disable-extensions")
-    options.add_argument("--disable-images")
-    options.add_argument("--blink-settings=imagesEnabled=false")
+    options.add_argument("--headless")  # Run in headless mode (no GUI)
+    options.add_argument("--no-sandbox")  # Bypass OS security model
+    options.add_argument("--disable-dev-shm-usage")  # Overcome limited resource problems
+    options.add_argument("--disable-gpu")  # Disable GPU hardware acceleration
+    options.add_argument("--disable-extensions")  # Disable extensions
+    options.add_argument("--disable-images")  # Disable image loading
+    options.add_argument("--blink-settings=imagesEnabled=false")  # Disable image rendering
     return options
 
 async def test_homepage_scan(keywords=None):
+    """
+    Scan NY Post homepage for articles containing specified keywords.
+    
+    Args:
+        keywords (list): List of keywords to search for in article titles
+        
+    Returns:
+        list: List of dictionaries containing matching article information
+    """
     if keywords is None:
         keywords = ["crypto", "bitcoin", "btc", "solana", "sol", "ripple", "xrp"]
     
@@ -48,6 +62,7 @@ async def test_homepage_scan(keywords=None):
         base_url = "https://nypost.com"
         driver.get(base_url)
         
+        # Wait for article links to load
         try:
             WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.TAG_NAME, "a"))
@@ -57,8 +72,10 @@ async def test_homepage_scan(keywords=None):
             print("No article links found")
             return []
             
+        # Parse the page content
         soup = BeautifulSoup(driver.page_source, 'html.parser')
         
+        # Find all article links using multiple selectors
         article_links = (
             soup.find_all('a', class_=lambda x: x and x.startswith('postid-')) or
             soup.find_all('a', href=lambda x: x and '/20' in x)
@@ -66,10 +83,12 @@ async def test_homepage_scan(keywords=None):
         
         print(f"Found {len(article_links)} total article links")
         
+        # Filter articles based on keywords
         matching_articles = []
         for link in article_links:
             if 'href' in link.attrs:
                 url = link['href']
+                # Skip shopping and subscription links
                 if any(x in url.lower() for x in ['/shopping/', 'tubitv.com', 'subscribe']):
                     continue
                     
@@ -90,6 +109,16 @@ async def test_homepage_scan(keywords=None):
         driver.quit()
 
 async def test_article_parse(url: str, max_retries=2):
+    """
+    Parse individual article content with retry mechanism.
+    
+    Args:
+        url (str): URL of the article to parse
+        max_retries (int): Maximum number of retry attempts
+        
+    Returns:
+        dict: Parsed article content including title, text, and metadata
+    """
     for attempt in range(max_retries):
         try:
             driver = webdriver.Chrome(service=Service(), options=get_chrome_options())
@@ -99,7 +128,7 @@ async def test_article_parse(url: str, max_retries=2):
             print(f"Fetching {url}")
             driver.get(url)
             
-            # Quick check for article content
+            # Wait for article content to load
             try:
                 WebDriverWait(driver, 5).until(
                     EC.presence_of_element_located((By.TAG_NAME, "article"))
@@ -108,6 +137,7 @@ async def test_article_parse(url: str, max_retries=2):
                 driver.quit()
                 continue
             
+            # Parse article content
             soup = BeautifulSoup(driver.page_source, 'html.parser')
             article_container = soup.find('article')
             
@@ -115,7 +145,7 @@ async def test_article_parse(url: str, max_retries=2):
                 title = article_container.find('h1')
                 content_paragraphs = article_container.find_all('p')
                 
-                # Updated date selectors for Page Six
+                # Find publish date using multiple selectors
                 publish_date = (
                     soup.find('meta', property='article:published_time') or
                     soup.find('meta', property='article:modified_time') or
@@ -131,7 +161,7 @@ async def test_article_parse(url: str, max_retries=2):
                     'publish_date': (publish_date['content'] if publish_date and 'content' in publish_date.attrs
                                    else publish_date['datetime'] if publish_date and 'datetime' in publish_date.attrs
                                    else 'Not found'),
-                    'timestamp': datetime.now().isoformat()  # Add current timestamp
+                    'timestamp': datetime.now().isoformat()
                 }
                 
                 driver.quit()
@@ -151,7 +181,13 @@ async def test_article_parse(url: str, max_retries=2):
 
 async def process_articles_parallel(matching_articles):
     """
-    Process multiple articles in parallel using asyncio.gather()
+    Process multiple articles concurrently using asyncio.
+    
+    Args:
+        matching_articles (list): List of articles to process
+        
+    Returns:
+        list: Processed article content
     """
     tasks = []
     for article in matching_articles:
@@ -180,6 +216,9 @@ async def process_articles_parallel(matching_articles):
         return []
 
 async def main():
+    """
+    Main execution function that coordinates the scraping process.
+    """
     start_time = time.time()
     print("Starting article scan and processing...")
     
@@ -192,6 +231,7 @@ async def main():
         print(f"\nFound {len(matching_articles)} matching articles. Processing in parallel...")
         processed_articles = await process_articles_parallel(matching_articles)
         
+        # Print results
         print("\nProcessing Results:")
         for article in processed_articles:
             print(f"\nTitle: {article['title']}")
@@ -203,9 +243,11 @@ async def main():
     else:
         print("\nNo articles found matching crypto keywords")
     
+    # Calculate and display execution time
     end_time = time.time()
     print(f"\nTotal processing time: {end_time - start_time:.2f} seconds")
 
+    # Save results to JSON file
     if processed_articles:
         output_file = f'nypost_crypto_articles_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json'
         with open(output_file, 'w') as f:
@@ -213,10 +255,10 @@ async def main():
         print(f"\nSaved results to {output_file}")
 
 if __name__ == "__main__":
-    # Increase the default number of workers for parallel processing
+    # Configure thread pool for parallel processing
     asyncio.get_event_loop().set_default_executor(
         ThreadPoolExecutor(max_workers=10)
     )
     
-    # Run with larger timeout for parallel processing
+    # Run main function with debug mode enabled
     asyncio.run(main(), debug=True) 
